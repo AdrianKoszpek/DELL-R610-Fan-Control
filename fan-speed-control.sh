@@ -4,93 +4,95 @@
 # Script for checking the temperature reported by the ambient temperature sensor,
 # and if deemed too high send the raw IPMI command to enable dynamic fan control.
 #
-# Initial code taken and modified from https://github.com/NoLooseEnds
+# Also get CPU temps from lm-sensors and adjust fan speeds according to defined
+# speed % which should be set according to your needs (each CPU model will vary)
+#
+# Requires:
+# ipmitool – apt-get install ipmitool
+# sensors - apt-get install lm-sensors
 # ----------------------------------------------------------------------------------
 
 # IPMI SETTINGS:
 # Modify to suit your needs.
-IPMI_HOST=192.168.0.89
-IPMI_USER=root
-IPMI_PW=root
+# DEFAULT IP: 192.168.0.120
+IPMIHOST=192.168.0.89
+IPMIUSER=root
+IPMIPW=root
+IPMIEK=0000000000000000000000000000000000000000
 
-# TEMPERATURE
-# Extract MAX temperature from first core in celsius using sensors command
-# outputs it as two digits, and then sets to 90% of value
-MIN_TEMP=35
-MAX_TEMP=$(sensors | grep Core | awk '/\+[0-9][0-9]\./{ print $6; exit }' | grep -o '[0-9][0-9]')
-MAX_TEMP=$(awk "BEGIN { print ${MAX_TEMP} * 0.9 }" )
+LASTSPEED=0
 
-TEMP_PERCENT_INCR=1.1
-# If you want to calculate use the following
-# TEMP_PERCENT_INCR=$(awk "BEGIN { print 100/(${MAX_TEMP} - ${MIN_TEMP}) }" )
-
-printf "MAX monitoring temp set to %0.2f based on reading\n" ${MAX_TEMP}
-printf "Temperature adjustments set to %0.2f%% per °C above ${MIN_TEMP}°C\n" ${TEMP_PERCENT_INCR}
-
-# time between checking CPU temp
-SLEEP_TIME=5
-
-TEMP_INDEX=0
-TEMP_ARRAY=($MIN_TEMP $MMIN_TEMP $MIN_TEMP $MIN_TEMP)
-while true
-do
-    # Extract current temp from first core in celsius using sensors
-    # command to get the temperature, and outputs it as two digits.
-    TEMPS=$(sensors | awk '/\+[0-9][0-9]\./{ print $3 }' | grep -o '[0-9][0-9]' | tr '\n' ' ')
-    TEMP=$(echo ${TEMPS} | awk '{s=0; for (i=1;i<=NF;i++)s+=$i; print s/NF;}')
-    TEMP=$(echo "(${TEMP}+0.5)/1" | bc)
-
-    TEMP_ARRAY[$TEMP_INDEX]=${TEMP}
-
-    AVG_TEMP=$(echo ${TEMP_ARRAY[@]} | awk '{s=0; for (i=1;i<=NF;i++)s+=$i; print s/NF;}')
-    AVG_TEMP=$(echo "(${AVG_TEMP}+0.5)/1" | bc)
-
-    TEMP_INDEX=$(( (${TEMP_INDEX} + 1) % 4 ))
-    if [[ $SLEEP_TIME == 5 && $TEMP_INDEX == 0 ]]
-    then
-	SLEEP_TIME=30
+function setfans () {
+  speed=$1
+  if [[ $speed == "auto" ]]; then
+    # Enable automatic fan speed control
+    if [[ "$speed" != "$LASTSPEED" ]]; then
+      ipmitool -I lanplus -H $IPMIHOST -U $IPMIUSER -P $IPMIPW -y $IPMIEK raw 0x30 0x30 0x01 0x01 >/dev/null 2>&1 &
+      LASTSPEED=${speed}
     fi
-
-    # set CONTROL to manual control if within the control temp range
-    CONTROL='0x01'
-    if [[ ${AVG_TEMP} < ${MAX_TEMP} ]]
-    then
-        CONTROL='0x00'
-    else
-        echo "Warning: Temperature has exceeded safe monitoring limits (${AVG_TEMP}°C > ${MAX_TEMP}°C)! Activating dynamic fan control!"
+    echo "[`date`] `hostname` FANS: AUTO (SYS TEMP: $SYSTEMP C, CPU TEMP: $CPUTEMP C)"
+  else
+    speedhex=$(echo "obase=16; $speed" | bc)
+    # Enable manual fan speed control
+    if [[ "$speed" != "$LASTSPEED" ]]; then
+      if [[ "$LASTSPEED" == "auto" ]] || [[ "$LASTSPEED" == "0" ]]; then
+        ipmitool -I lanplus -H $IPMIHOST -U $IPMIUSER -P $IPMIPW -y $IPMIEK raw 0x30 0x30 0x01 0x00 >/dev/null 2>&1 &
+      fi
+      ipmitool -I lanplus -H $IPMIHOST -U $IPMIUSER -P $IPMIPW -y $IPMIEK raw 0x30 0x30 0x02 0xff 0x${speedhex} >/dev/null 2>&1 &
+      LASTSPEED=${speed}
     fi
+    echo "[`date`] `hostname` FANS: ${speed}% (0x${speedhex}) (SYS TEMP: $SYSTEMP C, CPU TEMP: $CPUTEMP C)"
+  fi
+}
 
-    # ignored if on auto fan control
-    ipmitool -I lanplus -H ${IPMI_HOST} -U ${IPMI_USER} -P ${IPMI_PW} raw 0x30 0x30 0x01 ${CONTROL}
-    if [[ $? == 0  ]]
-    then
-        # ignored if on auto fan control
-        if [[ ${CONTROL} == '0x00' ]]
-        then
-            if [[ $(( ${OLD_TEMP} + 1 )) < ${AVG_TEMP} || $(( ${OLD_TEMP} - 1 )) > ${AVG_TEMP} ]]
-            then
-                TEMP_PERCENT=$(awk "BEGIN { print (${AVG_TEMP} - ${MIN_TEMP}) * ${TEMP_PERCENT_INCR} }")
-                TEMP_PERCENT=$(echo "(${TEMP_PERCENT}+0.5)/1" | bc)
+while [ 1 ]; do
 
-		if (( ${TEMP_PERCENT} < 20 ))
-                then
-                    TEMP_PERCENT=20
-                fi
+# This variable sends a IPMI command to get the temperature, and outputs it as two digits.
+# Do not edit unless you know what you do.
+SYSTEMP=$(ipmitool -I lanplus -H $IPMIHOST -U $IPMIUSER -P $IPMIPW -y $IPMIEK sdr type temperature |grep Ambient |grep degrees |grep -Po '\d{2}' | tail -1)
 
-                TEMP_PERCENT_HEX=$(echo "obase=16 ; ${TEMP_PERCENT}" | bc)
-                echo "Temperature reading has changed: ${OLD_TEMP}°C / new: ${AVG_TEMP}°C; Adjusting fan speed to ${TEMP_PERCENT}%"
+#average of all core temps
+#CPUTEMP=$(sensors -u | grep input | awk '{ total += $2; count++ } END { print total/count }')
+#highest of all core temps
+CPUTEMP=$(sensors -u | grep input | awk '{print $2}' | sort -r | head -n1)
 
-                ipmitool -I lanplus -H ${IPMI_HOST} -U ${IPMI_USER} -P ${IPMI_PW} raw 0x30 0x30 0x02 0xff 0x${TEMP_PERCENT_HEX}
-                OLD_TEMP=${AVG_TEMP}
-	    fi
-        fi
-    else
-	# Something went wrong connecting with IPMI
-	# poll more often, and make sure to fan speed is set when connection is good
-        OLD_TEMP=0
-	SLEEP_TIME=5
-    fi
+if [[ $SYSTEMP > 27 ]]; then
+  #echo   "Warning: SysTemp too high! Activating dynamic fan control! ($SYSTEMP C)"
+  #printf "Warning: SysTemp too high! Activating dynamic fan control! ($SYSTEMP C)" | systemd-cat -t R710-IPMI-TEMP
+  #echo "Warning: SysTemp too high! Activating dynamic fan control! ($SYSTEMP C)" | /usr/bin/slacktee.sh -t "R710-IPMI-TEMP [$(hostname)]"
+  setfans auto
+elif [[ $CPUTEMP > 90 ]]; then
+  setfans 100
+elif [[ $CPUTEMP > 89 ]]; then
+  setfans 95
+elif [[ $CPUTEMP > 88 ]]; then
+  setfans 90
+elif [[ $CPUTEMP > 86 ]]; then
+  setfans 80
+elif [[ $CPUTEMP > 84 ]]; then
+  setfans 60
+elif [[ $CPUTEMP > 82 ]]; then
+  setfans 58
+elif [[ $CPUTEMP > 80 ]]; then
+  setfans 56
+elif [[ $CPUTEMP > 78 ]]; then
+  setfans 54
+elif [[ $CPUTEMP > 76 ]]; then
+  setfans 52
+elif [[ $CPUTEMP > 74 ]]; then
+  setfans 50
+elif [[ $CPUTEMP > 72 ]]; then
+  setfans 40
+elif [[ $CPUTEMP > 70 ]]; then
+  setfans 35
+else
+  #echo   "Temps OK (SYS: $SYSTEMP C, CPU: $CPUTEMP C)"
+  # healthchecks.io #curl -fsS --retry 3 https://hchk.io/XXX >/dev/null 2>&1
+  #printf "Temps OK (SYS: $SYSTEMP C, CPU: $CPUTEMP C)" | systemd-cat -t R710-IPMI-TEMP
+  #23% good idle speed..
+  setfans 8
+fi
 
-    echo "Monitoring temperature every ${SLEEP_TIME}s, currently at ${OLD_TEMP}°C"
-    sleep ${SLEEP_TIME}
+sleep 10
+
 done
