@@ -9,9 +9,9 @@
 
 # IPMI SETTINGS:
 # Modify to suit your needs.
-IPMI_HOST=192.168.1.200
+IPMI_HOST=192.168.0.89
 IPMI_USER=root
-IPMI_PW=calvin
+IPMI_PW=root
 
 # TEMPERATURE
 # Extract MAX temperature from first core in celsius using sensors command
