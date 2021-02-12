@@ -1,15 +1,16 @@
 $ServerNames = @(
     'idrac-r710-01',
+    'idrac-r610-01',
     'idrac-r710-02',
     'idrac-r510-01'
 )
 
 $SleepTimer = 5 <# Default 30: Seconds between loops. #>
-$InitialSpeed = 20 <# Default 20: Speed to start at and ramp up or down as it needs to. #>
+$InitialSpeed = 5 <# Default 20: Speed to start at and ramp up or down as it needs to. #>
 $Step = 2 <# Default 2: How fast to go up and down as temps change. #>
 
 $DracUser = 'root'
-$DracPass = 'calvin'
+$DracPass = 'root'
 $IpmiPath = 'C:\Program Files (x86)\Dell\SysMgt\bmc'
 $IpmiTool = Get-ChildItem -Path $ipmiPath 'ipmitool.exe'
 
@@ -31,6 +32,7 @@ Function Get-SystemType () {
     $stdout = $stdout -replace " ", ""
     Switch ( $stdout ) {
         "1100000f506f776572456467652052373130" { Return "PowerEdge R710" }
+        "1100000f506f776572456467652052363130" { Return "PowerEdge R610" }
         "1100000f506f776572456467652052353130" { Return "PowerEdge R510" }
         default { Return "Unknown system type" }
     }
@@ -154,6 +156,12 @@ ForEach ( $Server in $ServerNames ){
     <# Adjust for various model servers as needed. #>
     Switch ( $TempServer.SystemType ) {
         "PowerEdge R510" {
+            $TempServer | Add-Member -NotePropertyName GetRPM -NotePropertyValue "$( $TempServer.BaseArgs ) sensor reading `"FAN MOD 3A RPM`""
+            $TempServer | Add-Member -NotePropertyName MinRPM -NotePropertyValue 1500
+            $TempServer | Add-Member -NotePropertyName MinSpeed -NotePropertyValue 10
+            $TempServer | Add-Member -NotePropertyName MaxTemp -NotePropertyValue 40
+        }
+        "PowerEdge R6510" {
             $TempServer | Add-Member -NotePropertyName GetRPM -NotePropertyValue "$( $TempServer.BaseArgs ) sensor reading `"FAN MOD 3A RPM`""
             $TempServer | Add-Member -NotePropertyName MinRPM -NotePropertyValue 1500
             $TempServer | Add-Member -NotePropertyName MinSpeed -NotePropertyValue 10
