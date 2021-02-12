@@ -3,7 +3,7 @@ Simple service to monitor ambient temp of Dell PowerEdge R610 and set fan speed 
 
 This service will start on boot, monitor the average core CPU temperature every 10s, and adjust fan speed over LAN via the ipmitool based on a rolling average of the average CPU temperatures every two minutes; i.e. `${AVG_CPU_TEMPS_ARRAY_SUM}/4`
 
-##**Works on Ubuntu 18**
+##**Works on Ubuntu 18** / Optional Windows Powershell Script added, no tutorial for that.
 
 ##**Temp Curve based on Xeon L5640**
 
