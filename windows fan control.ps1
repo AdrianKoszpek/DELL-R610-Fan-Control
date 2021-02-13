@@ -161,7 +161,7 @@ ForEach ( $Server in $ServerNames ){
             $TempServer | Add-Member -NotePropertyName MinSpeed -NotePropertyValue 10
             $TempServer | Add-Member -NotePropertyName MaxTemp -NotePropertyValue 40
         }
-        "PowerEdge R6510" {
+        "PowerEdge R610" {
             $TempServer | Add-Member -NotePropertyName GetRPM -NotePropertyValue "$( $TempServer.BaseArgs ) sensor reading `"FAN MOD 3A RPM`""
             $TempServer | Add-Member -NotePropertyName MinRPM -NotePropertyValue 1500
             $TempServer | Add-Member -NotePropertyName MinSpeed -NotePropertyValue 10
