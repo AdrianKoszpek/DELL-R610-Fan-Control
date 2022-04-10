@@ -1,222 +1,116 @@
-$ServerNames = @(
-    'idrac-r710-01',
-    'idrac-r610-01',
-    'idrac-r710-02',
-    'idrac-r510-01'
-)
+#######################################################################################R330FanControl.ps1###
 
-$SleepTimer = 5 <# Default 30: Seconds between loops. #>
-$InitialSpeed = 5 <# Default 20: Speed to start at and ramp up or down as it needs to. #>
-$Step = 2 <# Default 2: How fast to go up and down as temps change. #>
+# First and foremost, I cannot recommend using this or any script to alter system cooling or kill processes as it can cause damage or break stuff!
+# I accept no liability for anything, USE AT YOUR OWN RISK!
+# CAUTION this sctipt could possibly damage things especially data but if your server is already cooking itself it should help lower the temperatures but know if it kills something as it’s writing data consider it lost!
+# READ AND UNDERSTAND WHAT IT IS DOING SO YOU CAN MODIFY AS NEEDED
 
-$DracUser = 'root'
-$DracPass = 'root'
-$IpmiPath = 'C:\Program Files (x86)\Dell\SysMgt\bmc'
-$IpmiTool = Get-ChildItem -Path $ipmiPath 'ipmitool.exe'
+# REQUIRES ipmitools “OM-BMC-Dell-Web-WIN-9.1.0-2757_A00.exe” is what I downloaded from Dell at: https://www.dell.com/support/home/en-us/drivers/driversdetails?driverid=9ngfj
+# Add to the system variable path the installation folder which might be different from “C:\Program Files (x86)\Dell\SysMgt\bmc” where the ipmitool.exe is located.
 
-Function Get-SystemType () {
-    param( $Foo )
-    $pinfo = New-Object System.Diagnostics.ProcessStartInfo
-    $pinfo.FileName = $ipmiTool.FullName
-    $pinfo.RedirectStandardError = $true
-    $pinfo.RedirectStandardOutput = $true
-    $pinfo.UseShellExecute = $false
-    $pinfo.Arguments = $Foo.getSystemType
-    $pinfo.CreateNoWindow = $true
-    $p = New-Object System.Diagnostics.Process
-    $p.StartInfo = $pinfo
-    $p.Start() | Out-Null
-    $p.WaitForExit()
-    $stdout = $p.StandardOutput.ReadToEnd()
-    $stdout = $stdout -replace "`n", ""
-    $stdout = $stdout -replace " ", ""
-    Switch ( $stdout ) {
-        "1100000f506f776572456467652052373130" { Return "PowerEdge R710" }
-        "1100000f506f776572456467652052363130" { Return "PowerEdge R610" }
-        "1100000f506f776572456467652052353130" { Return "PowerEdge R510" }
-        default { Return "Unknown system type" }
-    }
+# Setup
+# create a scheduled task to run on startup that calls powershell.exe with the following parameter(remove the # before the -file part):
+# -file “C:\Scripts\PS\R330FanControl\R330FanControl.ps1″
+# Set to run with highest privledges and without being logged in, be sure it’s enabled and reboot. Then verify it’s running in the background.
+
+#Variables###################################
+
+# Set iDRAC IP
+$iDRAC=”XXX.XXX.XXX.XXX”
+# Set iDRAC Credentials
+$usr=”root”
+$pw=”calvin”
+
+#Reset counter
+$i=0
+
+# Enables fan control via ipmitool
+$FanControlEnable = “ipmitool -I lanplus -H $iDRAC -U $usr -P $pw raw 0x30 0x30 0x01 0x00”
+
+# DISABLE FAN CONTROL if you ever want to do so.
+# ipmitool -I lanplus -H $iDRAC -U $usr -P $pw raw 0x30 0x30 0x01 0x01
+
+# Sets fan speed to % defined in $FanControl variable
+# hex conversion tables http://cactus.io/resources/toolbox/decimal-binary-octal-hexadecimal-conversion
+$FanControl20 = (“ipmitool -I lanplus -H $iDRAC -U $usr -P $pw raw 0x30 0x30 0x02 0xff 0x14”)
+$FanControl30 = (“ipmitool -I lanplus -H $iDRAC -U $usr -P $pw raw 0x30 0x30 0x02 0xff 0x1e”)
+$FanControl40 = (“ipmitool -I lanplus -H $iDRAC -U $usr -P $pw raw 0x30 0x30 0x02 0xff 0x28”)
+$FanControl50 = (“ipmitool -I lanplus -H $iDRAC -U $usr -P $pw raw 0x30 0x30 0x02 0xff 0x32”)
+$FanControl60 = (“ipmitool -I lanplus -H $iDRAC -U $usr -P $pw raw 0x30 0x30 0x02 0xff 0x3c”)
+$FanControl70 = (“ipmitool -I lanplus -H $iDRAC -U $usr -P $pw raw 0x30 0x30 0x02 0xff 0x46”)
+$FanControl80 = (“ipmitool -I lanplus -H $iDRAC -U $usr -P $pw raw 0x30 0x30 0x02 0xff 0x50”)
+$FanControl90 = (“ipmitool -I lanplus -H $iDRAC -U $usr -P $pw raw 0x30 0x30 0x02 0xff 0x5a”)
+$FanControl100 = (“ipmitool -I lanplus -H $iDRAC -U $usr -P $pw raw 0x30 0x30 0x02 0xff 0x64”)
+
+#######################
+$KillHighCPU = “C:\Scripts\PS\R330FanControl\Kill_CPU_hog.ps1”
+#######################
+# Retrieves temperatures:
+# ipmitool -H $iDRAC -U $usr -P $pw -I lanplus sdr elist | findstr “Temp” | findstr “0Eh”
+
+#############################################
+
+Invoke-Expression -Command $FanControlEnable
+
+While($true)
+{
+$i++
+$cpuTemp = (ipmitool -H $iDRAC -U $usr -P $pw -I lanplus sdr elist | findstr “Temp” | findstr “0Eh” | %{$_.split(‘|’)[4]})
+
+# Extract the digits of the temperature
+$cpuTempDigits=$cpuTemp.Substring(0,3)
+
+# Displays the temerature as the script is running
+$cpuTempDigits
+
+# Switch logic to change the fan based on operating temperature reported via ipmi. (I noticed this displays different temperatures thatn Speccy, not sure which is more accurate)
+# My processor is a e3-1220 V6 which from what I could find has a maximum temperature of ~70°C
+# The last temperature from 67-999C will invoke another script tha twill find and kill the process usign the most CPU resources, THIS COULD POTENTIALLY BE DANGEROUS!
+switch ($cpuTempDigits) {
+{1..49 -contains $_}{write-host “Fan set to 20%” ; Invoke-Expression -Command $FanControl20}
+{50..52 -contains $_}{write-host “Fan set to 30%” ;Invoke-Expression -Command $FanControl30}
+{53..54 -contains $_}{write-host “Fan set to 40%” ;Invoke-Expression -Command $FanControl40}
+{55..56 -contains $_}{write-host “Fan set to 50%” ;Invoke-Expression -Command $FanControl50}
+{57..58 -contains $_}{write-host “Fan set to 60%” ;Invoke-Expression -Command $FanControl60}
+{59..60 -contains $_}{write-host “Fan set to 70%” ;Invoke-Expression -Command $FanControl70}
+{61..62 -contains $_}{write-host “Fan set to 80%” ;Invoke-Expression -Command $FanControl80}
+{63..64 -contains $_}{write-host “Fan set to 90%” ;Invoke-Expression -Command $FanControl90}
+{65..66 -contains $_}{write-host “Fan set to 100%” ;Invoke-Expression -Command $FanControl100}
+{67..999 -contains $_}{write-host “Killing processes to cool down!” ;Invoke-Expression -Command $KillHighCPU}
+
+}
+# IF YOU ARE MANUALLY RUNNING THIS SCRIPT you can uncomment out the line below to watch it display the number of times it’s checking temps and setting the fan speeds.
+#Write-Host “Action has run $i times at” (date)
 }
 
-Function Get-PowerState (){
-    param( $Foo )
-    $pinfo = New-Object System.Diagnostics.ProcessStartInfo
-    $pinfo.FileName = $ipmiTool.FullName
-    $pinfo.RedirectStandardError = $true
-    $pinfo.RedirectStandardOutput = $true
-    $pinfo.UseShellExecute = $false
-    $pinfo.Arguments = $Foo.GetPowerState
-    $pinfo.CreateNoWindow = $true
-    $p = New-Object System.Diagnostics.Process
-    $p.StartInfo = $pinfo
-    $p.Start() | Out-Null
-    $p.WaitForExit()
-    $stdout = $p.StandardOutput.ReadToEnd()
-    If ( $stdout -like "Chassis Power is on*" ) { Return $true }
-    Else { Return $false }
+#################################################################################
+
+Now here’s the  script that kills the task using the most amount of CPU:
+
+#################################################################################
+
+### Kill_CPU_Hog.ps1 ###
+# First and foremost, I cannot recommend using this or any script to alter system cooling or kill processes as it can cause damage or break stuff!
+# I accept no liability for anything, USE AT YOUR OWN RISK!
+# CAUTION this sctipt could possibly damage things especially data but if your server is already cooking itself it should help lower the temperatures but know if it kills something as it’s writing data consider it lost!
+# This is the second script that finds what is taking the most CPU usage and kills that process. This script should not be run on it’s own.
+# This script is invoked by the R330FanControl script that only calls it if the CPU temperature is running too hot and the fans are spinning as fast as they can to keep it cool and it’s still not enough.
+# Then this script is invoked to kill whatever is potentially causing the server to overheat.
+# https://www.youtube.com/c/ShinyTechThings
+
+#Get all cores, which includes virtual cores from hyperthreading
+$cores = (Get-WmiObject Win32_ComputerSystem).NumberOfLogicalProcessors
+#Get all process with there ID’s, excluding processes you can’t stop.
+$processes = ((Get-Counter “\Process(*)\ID Process”).CounterSamples).where({$_.InstanceName -notin “idle”,”_total”,”system”})
+#Get cpu time for all processes
+$cputime = $processes.Path.Replace(“id process”, “% Processor Time”) | get-counter | select -ExpandProperty CounterSamples
+#Get the processes with above 14% utilisation.
+$highUsage = $cputime.where({[Math]::round($_.CookedValue / $cores,2) -gt 14})
+# For each high usage process, grab it’s process ID from the processes list, by matching on the relevant part of the path
+$highUsage |%{
+$path = $_.Path
+$id = $processes.where({$_.Path -like “*$($path.Split(‘(‘)[1].Split(‘)’)[0])*”}) | select -ExpandProperty CookedValue
+Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
 }
 
-Function Get-RPM (){
-    param( $Foo )
-    $pinfo = New-Object System.Diagnostics.ProcessStartInfo
-    $pinfo.FileName = $ipmiTool.FullName
-    $pinfo.RedirectStandardError = $true
-    $pinfo.RedirectStandardOutput = $true
-    $pinfo.UseShellExecute = $false
-    $pinfo.Arguments = $Foo.GetRPM
-    $pinfo.CreateNoWindow = $true
-    $p = New-Object System.Diagnostics.Process
-    $p.StartInfo = $pinfo
-    $p.Start() | Out-Null
-    $p.WaitForExit()
-    $stdout = $p.StandardOutput.ReadToEnd()
-    Return [int]$stdout.Substring( $stdout.IndexOf( "|" ) +1 )
-}
-
-Function Get-Temp (){
-    param( $Foo )
-    $pinfo = New-Object System.Diagnostics.ProcessStartInfo
-    $pinfo.FileName = $ipmiTool.FullName
-    $pinfo.RedirectStandardError = $true
-    $pinfo.RedirectStandardOutput = $true
-    $pinfo.UseShellExecute = $false
-    $pinfo.Arguments = $Foo.GetTemp
-    $pinfo.CreateNoWindow = $true
-    $p = New-Object System.Diagnostics.Process
-    $p.StartInfo = $pinfo
-    $p.Start() | Out-Null
-    $p.WaitForExit()
-    $stdout = $p.StandardOutput.ReadToEnd()
-    Return [int]$stdout.Substring( $stdout.IndexOf( "|" ) +1 )
-}  
-
-Function Set-Control (){
-    param( $Foo, $Type )
-    $pinfo = New-Object System.Diagnostics.ProcessStartInfo
-    $pinfo.FileName = $ipmiTool.FullName
-    $pinfo.RedirectStandardError = $true
-    $pinfo.RedirectStandardOutput = $true
-    $pinfo.UseShellExecute = $false   
-    If ( $Type -eq "A" ) { $pinfo.Arguments = $Foo.SetAuto }
-    If ( $Type -eq "M" ) { $pinfo.Arguments = $Foo.SetManual }
-    $pinfo.CreateNoWindow = $true
-    $p = New-Object System.Diagnostics.Process
-    $p.StartInfo = $pinfo
-    $p.Start() | Out-Null
-    $p.WaitForExit()
-}
-
-Function Set-Speed () {
-    param( $Foo )
-    $pinfo = New-Object System.Diagnostics.ProcessStartInfo
-    $pinfo.FileName = $ipmiTool.FullName
-    $pinfo.RedirectStandardError = $true
-    $pinfo.RedirectStandardOutput = $true
-    $pinfo.UseShellExecute = $false
-    $pinfo.Arguments = "$( $Foo.SetSpeed )$( "{0:x2}" -f $Foo.Speed )"
-    $pinfo.CreateNoWindow = $true
-    $p = New-Object System.Diagnostics.Process
-    $p.StartInfo = $pinfo
-    $p.Start() | Out-Null
-    $p.WaitForExit()
-}
-
-
-[System.Collections.ArrayList]$Servers = @()
-
-<#
-This is a terribly inefficient way to do this, but it works and is easy to debug, so too bad.
-Also, I could have checked if servers are online and skipped them entirely during the initialization, but I didn't on purpose.
-I wanted this to be flexible enough to work with servers that go on and off.
-#>
-
-"Initializing everything. This will take a few seconds per server."
-
-ForEach ( $Server in $ServerNames ){
-    $TempServer = New-Object -TypeName psobject
-    $TempServer | Add-Member -NotePropertyName ServerName -NotePropertyValue $Server
-    $TempServer | Add-Member -NotePropertyName BaseArgs -NotePropertyValue "-I lanplus -H $( $TempServer.ServerName ) -U $dracUser -P $dracPass"
-    
-    $TempServer | Add-Member -NotePropertyName SetAuto -NotePropertyValue "$( $TempServer.BaseArgs ) raw 0x30 0x30 0x01 0x01"
-    $TempServer | Add-Member -NotePropertyName SetManual -NotePropertyValue "$( $TempServer.BaseArgs ) raw 0x30 0x30 0x01 0x00"
-    $TempServer | Add-Member -NotePropertyName Speed -NotePropertyValue $InitialSpeed
-    $TempServer | Add-Member -NotePropertyName SetSpeed -NotePropertyValue "$( $TempServer.BaseArgs ) raw 0x30 0x30 0x02 0xff 0x"
-    
-    $TempServer | Add-Member -NotePropertyName GetTemp   -NotePropertyValue "$( $TempServer.BaseArgs ) sensor reading `"Ambient Temp`""
-    $TempServer | Add-Member -NotePropertyName CurrentTemp -NotePropertyValue ( Get-Temp $TempServer )
-    $TempServer | Add-Member -NotePropertyName LastTemp -NotePropertyValue $TempServer.CurrentTemp
-
-    $TempServer | Add-Member -NotePropertyName GetSystemType -NotePropertyValue "$( $TempServer.BaseArgs ) raw 0x06 0x59 0x00 0xd1 0x00 0x00"
-    $TempServer | Add-Member -NotePropertyName SystemType -NotePropertyValue ( Get-SystemType $TempServer )
-    
-    $TempServer | Add-Member -NotePropertyName DracOnline -NotePropertyValue ( Test-Connection $TempServer.ServerName -Count 1 -Quiet )
-    $TempServer | Add-Member -NotePropertyName GetPowerState -NotePropertyValue "$( $TempServer.BaseArgs ) chassis power status"
-    $TempServer | Add-Member -NotePropertyName PoweredOn -NotePropertyValue ( Get-PowerState $TempServer )
-    
-    <# Adjust for various model servers as needed. #>
-    Switch ( $TempServer.SystemType ) {
-        "PowerEdge R510" {
-            $TempServer | Add-Member -NotePropertyName GetRPM -NotePropertyValue "$( $TempServer.BaseArgs ) sensor reading `"FAN MOD 3A RPM`""
-            $TempServer | Add-Member -NotePropertyName MinRPM -NotePropertyValue 1500
-            $TempServer | Add-Member -NotePropertyName MinSpeed -NotePropertyValue 10
-            $TempServer | Add-Member -NotePropertyName MaxTemp -NotePropertyValue 40
-        }
-        "PowerEdge R610" {
-            $TempServer | Add-Member -NotePropertyName GetRPM -NotePropertyValue "$( $TempServer.BaseArgs ) sensor reading `"FAN MOD 3A RPM`""
-            $TempServer | Add-Member -NotePropertyName MinRPM -NotePropertyValue 1500
-            $TempServer | Add-Member -NotePropertyName MinSpeed -NotePropertyValue 10
-            $TempServer | Add-Member -NotePropertyName MaxTemp -NotePropertyValue 40
-        }
-        "PowerEdge R710" {
-            $TempServer | Add-Member -NotePropertyName GetRPM -NotePropertyValue "$( $TempServer.BaseArgs ) sensor reading `"FAN 3 RPM`""
-            $TempServer | Add-Member -NotePropertyName MinRPM -NotePropertyValue 1000
-            $TempServer | Add-Member -NotePropertyName MinSpeed -NotePropertyValue 10
-            $TempServer | Add-Member -NotePropertyName MaxTemp -NotePropertyValue 40
-        }
-        default {  }
-    }
-    
-    $TempServer | Add-Member -NotePropertyName CurrentRPM -NotePropertyValue ( Get-RPM $TempServer )
-    $Servers.Add( $TempServer ) | Out-Null
-}
-
-$Servers | ForEach-Object { Set-Control $_ "M" }
-$Servers | ForEach-Object { Set-Speed $Server.Speed }
-
-Start-Sleep -Seconds $SleepTimer
-
-Do {
-    ForEach ( $Server in $Servers ) {
-        $Server.DracOnline = Test-Connection $Server.ServerName -Count 1 -Quiet
-        $Server.PoweredOn = Get-PowerState $Server
-        If ( $Server.DracOnline -and $Server.PoweredOn ) {
-            $Server.CurrentTemp = Get-Temp $Server
-            Switch ( $Server ) {
-                { $Server.CurrentTemp -ge $Server.MaxTemp } {
-                    Set-Control $Server "A"
-                    For ( $i = 1 ; $i -le 5 ; $i ++ ) {
-                        [console]::Beep( 3000, 100 )
-                        [console]::Beep( 2000, 100 )
-                        }
-                }
-                
-                { $Server.CurrentTemp -le $Server.LastTemp } {
-                    If ( ( $Server.Speed - $Step ) -ge $Server.MinSpeed ) { $Server.Speed = $Server.Speed - $Step }
-                }
-                
-                { $Server.CurrentTemp -gt $Server.LastTemp } {
-                    $Server.Speed = $Server.Speed + ( $Step * 2 )
-                }
-            }
-        Set-Speed $Server
-        $Server.CurrentRPM = Get-RPM $Server    
-        $Server.LastTemp = $Server.CurrentTemp    
-        }
-    }
-    $Servers | Where-Object { $_.PoweredOn } | Select-Object `
-        @{ Name = "Server Name" ; Expression = { $_.ServerName } } , `
-        @{ Name = "Temperature" ; Expression = { $_.CurrentTemp } } , `
-        @{ Name = "Fan RPM"; Expression = { $_.CurrentRPM } }, `
-        Speed
-    Start-Sleep -Seconds $SleepTimer
-} While ( $true )
+#################################################################################
